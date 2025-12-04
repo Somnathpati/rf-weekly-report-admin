@@ -1,13 +1,11 @@
 import streamlit as st
-import sqlite3
+import psycopg2
 from datetime import date, datetime, timedelta
 import pandas as pd
 
 # =============================
 # CONFIG
 # =============================
-
-DB_NAME = "weekly_reports.db"
 
 THEMES = [
     "1. AI-Driven Multilingual Content Localization & Accessible Digital Outreach through Integrated Multichannel Platforms",
@@ -56,11 +54,32 @@ DEPARTMENTS = ["Dissemination", "KMS", "GIS", "Platform", "Other"]
 
 
 # =============================
-# DATABASE HELPERS
+# SUPABASE DATABASE HELPERS
 # =============================
 
 def get_conn():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    """
+    Connect to Supabase Postgres using credentials stored in st.secrets.
+
+    st.secrets should contain:
+
+    [supabase]
+    host = "YOUR_HOST"
+    port = 5432
+    database = "YOUR_DB"
+    user = "YOUR_USER"
+    password = "YOUR_PASSWORD"
+    """
+    sb = st.secrets["supabase"]
+    conn = psycopg2.connect(
+        host=sb["host"],
+        port=sb.get("port", 5432),
+        dbname=sb["database"],
+        user=sb["user"],
+        password=sb["password"],
+        sslmode="require"  # important for Supabase
+    )
+    return conn
 
 
 def init_db():
@@ -69,27 +88,28 @@ def init_db():
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            submission_date TEXT,
-            week_start TEXT,
-            week_end TEXT,
+            id SERIAL PRIMARY KEY,
+            submission_date DATE,
+            week_start DATE,
+            week_end DATE,
             employee TEXT,
             department TEXT,
             theme TEXT,
             work TEXT,
             pending INTEGER,
             justification TEXT,
-            updated TEXT
+            updated TIMESTAMPTZ
         )
         """
     )
     conn.commit()
+    cur.close()
     conn.close()
 
 
 def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.DataFrame):
     """
-    One person + one week = one report
+    One person + one week = one report.
     We delete existing entries for that (employee, week_start, week_end)
     then insert the new set of rows.
     """
@@ -100,12 +120,13 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
     cur.execute(
         """
         DELETE FROM reports
-        WHERE employee = ? AND week_start = ? AND week_end = ?
+        WHERE employee = %s AND week_start = %s AND week_end = %s
         """,
-        (employee, week_start.isoformat(), week_end.isoformat()),
+        (employee, week_start, week_end),
     )
 
     # Insert new rows
+    now = datetime.utcnow()
     for r in rows.to_dict("records"):
         work_text = (r.get("work") or "").strip()
         is_pending = bool(r.get("pending", False))
@@ -122,39 +143,37 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
             (submission_date, week_start, week_end,
              employee, department,
              theme, work, pending, justification, updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                submission_date.isoformat(),
-                week_start.isoformat(),
-                week_end.isoformat(),
+                submission_date,
+                week_start,
+                week_end,
                 employee,
                 dept,
                 theme,
                 work_text,
                 1 if is_pending else 0,
                 justification if is_pending else "",
-                datetime.now().isoformat(),
+                now,
             ),
         )
 
     conn.commit()
+    cur.close()
     conn.close()
 
 
 def load_user_week(employee, week_start, week_end):
     """Load all rows for this person + week; if none, return 1 empty row."""
     conn = get_conn()
-    df = pd.read_sql(
-        """
+    query = """
         SELECT theme, work, pending, justification
         FROM reports
-        WHERE employee = ? AND week_start = ? AND week_end = ?
+        WHERE employee = %s AND week_start = %s AND week_end = %s
         ORDER BY id
-        """,
-        conn,
-        params=[employee, week_start.isoformat(), week_end.isoformat()],
-    )
+    """
+    df = pd.read_sql(query, conn, params=[employee, week_start, week_end])
     conn.close()
 
     if df.empty:
@@ -192,7 +211,6 @@ def read_all_reports():
 
 def last_monday():
     today = date.today()
-    # Monday = 0
     return today - timedelta(days=today.weekday() + 7)
 
 
@@ -206,25 +224,21 @@ def last_sunday():
 
 def get_role_from_url():
     """
-    Read ?role=user or ?role=admin from URL using st.query_params (new API).
+    Read ?role=user or ?role=admin from URL using st.query_params.
     Default = user
     """
     role = "user"
     try:
         params = st.query_params
-
         if "role" in params:
             candidate = params["role"]
             if isinstance(candidate, list):
                 candidate = candidate[0]
-
             candidate = candidate.lower()
             if candidate in ("user", "admin"):
                 role = candidate
-
     except Exception:
         role = "user"
-
     return role
 
 
@@ -232,8 +246,8 @@ def get_role_from_url():
 # STREAMLIT APP
 # =============================
 
-init_db()
 st.set_page_config("Weekly RF Work Report", layout="wide")
+init_db()  # ensure table exists at startup
 
 role = get_role_from_url()
 
@@ -288,6 +302,7 @@ if menu == "Submit Weekly Report":
             "pending": st.column_config.CheckboxColumn("Pending"),
             "justification": st.column_config.TextColumn("Justification (if pending)"),
         },
+        key="weekly_editor",
     )
 
     if st.button("✅ Submit / Update Weekly Report"):
