@@ -47,43 +47,74 @@ EMPLOYEES = [
     "Priyanka Sharma",
     "Shivam Periwal",
     "Selvaraj",
-    "Other"
+    "Other",
 ]
 
 DEPARTMENTS = ["Dissemination", "KMS", "GIS", "Platform", "Other"]
 
 
 # =============================
-# SUPABASE CONNECTION
+# SUPABASE CONNECTION (SAFE)
 # =============================
 
 def get_conn():
     """
-    Read connection details from st.secrets['supabase']:
-
-    [supabase]
-    host = "db.amggibyukfnzozeofvcg.supabase.co"
-    port = 5432
-    database = "postgres"
-    user = "postgres"
-    password = "YOUR_NEW_SIMPLE_PASSWORD"
+    Safely connect to Supabase using st.secrets['supabase'].
+    If secrets are missing / misconfigured, show a clear error in the UI
+    instead of crashing with KeyError.
     """
+    if "supabase" not in st.secrets:
+        st.error(
+            "❌ No [supabase] section found in Streamlit secrets.\n\n"
+            "Go to your app in Streamlit Cloud → 'Edit secrets' and add:\n\n"
+            "[supabase]\n"
+            'host = "db.amggibyukfnzozeofvcg.supabase.co"\n'
+            "port = 5432\n"
+            'database = "postgres"\n'
+            'user = "postgres"\n'
+            'password = "YOUR_NEW_SIMPLE_PASSWORD"\n'
+        )
+        st.stop()
+
     cfg = st.secrets["supabase"]
-    conn = psycopg2.connect(
-        host=cfg["host"],
-        port=cfg.get("port", 5432),
-        dbname=cfg["database"],
-        user=cfg["user"],
-        password=cfg["password"],
-        sslmode="require",  # needed for Supabase
-    )
-    return conn
+
+    required_keys = ["host", "database", "user", "password"]
+    missing = [k for k in required_keys if k not in cfg]
+
+    if missing:
+        st.error(
+            "❌ Missing keys in [supabase] secrets: "
+            + ", ".join(missing)
+            + "\n\nPlease open 'Edit secrets' and add them."
+        )
+        st.stop()
+
+    try:
+        conn = psycopg2.connect(
+            host=cfg["host"],
+            port=cfg.get("port", 5432),
+            dbname=cfg["database"],
+            user=cfg["user"],
+            password=cfg["password"],
+            sslmode="require",  # required for Supabase
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        st.error(
+            "❌ Could not connect to Supabase database.\n\n"
+            "Check that:\n"
+            "• Project is Active (not Paused) in Supabase\n"
+            "• Host / database / user / password are correct\n\n"
+            f"Technical detail: {e}"
+        )
+        st.stop()
 
 
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS reports(
             id SERIAL PRIMARY KEY,
             submission_date DATE,
@@ -97,7 +128,8 @@ def init_db():
             justification TEXT,
             updated TIMESTAMPTZ
         )
-    """)
+        """
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -111,12 +143,15 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("""
+    cur.execute(
+        """
         DELETE FROM reports
         WHERE employee = %s
           AND week_start = %s
           AND week_end = %s
-    """, (employee, week_start, week_end))
+        """,
+        (employee, week_start, week_end),
+    )
 
     now = datetime.utcnow()
 
@@ -129,7 +164,8 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
         if not work and not pending and not justification:
             continue
 
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO reports (
                 submission_date,
                 week_start,
@@ -143,18 +179,20 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
                 updated
             )
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (
-            submission_date,
-            week_start,
-            week_end,
-            employee,
-            dept,
-            theme,
-            work,
-            1 if pending else 0,
-            justification if pending else "",
-            now
-        ))
+            """,
+            (
+                submission_date,
+                week_start,
+                week_end,
+                employee,
+                dept,
+                theme,
+                work,
+                1 if pending else 0,
+                justification if pending else "",
+                now,
+            ),
+        )
 
     conn.commit()
     cur.close()
@@ -163,23 +201,31 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
 
 def load_user_week(employee, week_start, week_end):
     conn = get_conn()
-    df = pd.read_sql("""
+    df = pd.read_sql(
+        """
         SELECT theme, work, pending, justification
         FROM reports
         WHERE employee = %s
           AND week_start = %s
           AND week_end = %s
         ORDER BY id
-    """, conn, params=[employee, week_start, week_end])
+        """,
+        conn,
+        params=[employee, week_start, week_end],
+    )
     conn.close()
 
     if df.empty:
-        return pd.DataFrame([{
-            "theme": THEMES[0],
-            "work": "",
-            "pending": False,
-            "justification": ""
-        }])
+        return pd.DataFrame(
+            [
+                {
+                    "theme": THEMES[0],
+                    "work": "",
+                    "pending": False,
+                    "justification": "",
+                }
+            ]
+        )
     else:
         df["pending"] = df["pending"].astype(bool)
         return df
@@ -288,8 +334,8 @@ if menu == "Submit Weekly Report":
             "theme": st.column_config.SelectboxColumn("Theme", options=THEMES),
             "work": st.column_config.TextColumn("Work Done"),
             "pending": st.column_config.CheckboxColumn("Pending"),
-            "justification": st.column_config.TextColumn("Justification (if pending)")
-        }
+            "justification": st.column_config.TextColumn("Justification (if pending)"),
+        },
     )
 
     if st.button("✅ Submit / Update Weekly Report"):
@@ -318,19 +364,19 @@ if menu == "View Reports":
         with col1:
             period = st.selectbox(
                 "Time Period",
-                ["Weekly", "Monthly", "Quarterly", "Half-Yearly", "Yearly", "All"]
+                ["Weekly", "Monthly", "Quarterly", "Half-Yearly", "Yearly", "All"],
             )
 
         with col2:
             empf = st.selectbox(
                 "Employee",
-                ["All"] + sorted(df["employee"].unique())
+                ["All"] + sorted(df["employee"].unique()),
             )
 
         with col3:
             deptf = st.selectbox(
                 "Department",
-                ["All"] + sorted(df["department"].unique())
+                ["All"] + sorted(df["department"].unique()),
             )
 
         today = date.today()
@@ -346,7 +392,6 @@ if menu == "View Reports":
                 start = date(today.year, 1 if today.month <= 6 else 7, 1)
             elif period == "Yearly":
                 start = date(today.year, 1, 1)
-
             df = df[df["submission_date"] >= start]
 
         if empf != "All":
@@ -359,10 +404,18 @@ if menu == "View Reports":
         st.metric("Pending Tasks", int(df["pending"].sum()))
 
         st.subheader("By Employee")
-        st.dataframe(df.groupby("employee").size().reset_index(name="Activities"))
+        st.dataframe(
+            df.groupby("employee")
+            .size()
+            .reset_index(name="Activities")
+        )
 
         st.subheader("By Theme")
-        st.dataframe(df.groupby("theme").size().reset_index(name="Activities"))
+        st.dataframe(
+            df.groupby("theme")
+            .size()
+            .reset_index(name="Activities")
+        )
 
         st.subheader("Detailed Data")
         st.dataframe(df, use_container_width=True)
