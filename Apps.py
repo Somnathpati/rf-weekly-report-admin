@@ -1,11 +1,13 @@
 import streamlit as st
-import psycopg2
+import sqlite3
 from datetime import date, datetime, timedelta
 import pandas as pd
 
 # =============================
 # CONFIG
 # =============================
+
+DB_NAME = "weekly_reports.db"
 
 THEMES = [
     "1. AI-Driven Multilingual Content Localization & Accessible Digital Outreach through Integrated Multichannel Platforms",
@@ -54,54 +56,12 @@ DEPARTMENTS = ["Dissemination", "KMS", "GIS", "Platform", "Other"]
 
 
 # =============================
-# SUPABASE CONNECTION (SAFE)
+# SQLITE HELPERS
 # =============================
 
 def get_conn():
-    cfg = st.secrets["supabase"]
+    return sqlite3.connect(DB_NAME, check_same_thread=False)
 
-    required_keys = ["host", "database", "user", "password"]
-    missing = [k for k in required_keys if k not in cfg]
-    if missing:
-        st.error("Missing keys in [supabase] secrets: " + ", ".join(missing))
-        st.stop()
-
-    # hostaddr is optional – we use it to force IPv4 if present
-    hostaddr = cfg.get("hostaddr", None)
-
-    try:
-        if hostaddr:
-            conn = psycopg2.connect(
-                host=cfg["host"],       # used for TLS / server name
-                hostaddr=hostaddr,      # actual IPv4 address to connect to
-                port=cfg.get("port", 5432),
-                dbname=cfg["database"],
-                user=cfg["user"],
-                password=cfg["password"],
-                sslmode="require",
-            )
-        else:
-            # fallback (IPv6/IPv4 auto) – but we *want* hostaddr
-            conn = psycopg2.connect(
-                host=cfg["host"],
-                port=cfg.get("port", 5432),
-                dbname=cfg["database"],
-                user=cfg["user"],
-                password=cfg["password"],
-                sslmode="require",
-            )
-        return conn
-
-    except psycopg2.OperationalError as e:
-        st.error(
-            "❌ Could not connect to Supabase database.\n\n"
-            "Check that:\n"
-            "• Project is Active (not Paused) in Supabase\n"
-            "• Host / database / user / password are correct\n"
-            "• IPv4 hostaddr is correct\n\n"
-            f"Technical detail: {e}"
-        )
-        st.stop()
 
 def init_db():
     conn = get_conn()
@@ -109,28 +69,23 @@ def init_db():
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS reports(
-            id SERIAL PRIMARY KEY,
-            submission_date DATE,
-            week_start DATE,
-            week_end DATE,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            submission_date TEXT,
+            week_start TEXT,
+            week_end TEXT,
             employee TEXT,
             department TEXT,
             theme TEXT,
             work TEXT,
             pending INTEGER,
             justification TEXT,
-            updated TIMESTAMPTZ
+            updated TEXT
         )
         """
     )
     conn.commit()
-    cur.close()
     conn.close()
 
-
-# =============================
-# DATABASE FUNCTIONS
-# =============================
 
 def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.DataFrame):
     conn = get_conn()
@@ -139,14 +94,14 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
     cur.execute(
         """
         DELETE FROM reports
-        WHERE employee = %s
-          AND week_start = %s
-          AND week_end = %s
+        WHERE employee = ?
+          AND week_start = ?
+          AND week_end = ?
         """,
-        (employee, week_start, week_end),
+        (employee, week_start.isoformat(), week_end.isoformat()),
     )
 
-    now = datetime.utcnow()
+    now = datetime.now().isoformat()
 
     for r in rows.to_dict("records"):
         work = (r.get("work") or "").strip()
@@ -171,12 +126,12 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
                 justification,
                 updated
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
             """,
             (
-                submission_date,
-                week_start,
-                week_end,
+                submission_date.isoformat(),
+                week_start.isoformat(),
+                week_end.isoformat(),
                 employee,
                 dept,
                 theme,
@@ -188,7 +143,6 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
         )
 
     conn.commit()
-    cur.close()
     conn.close()
 
 
@@ -198,13 +152,13 @@ def load_user_week(employee, week_start, week_end):
         """
         SELECT theme, work, pending, justification
         FROM reports
-        WHERE employee = %s
-          AND week_start = %s
-          AND week_end = %s
+        WHERE employee = ?
+          AND week_start = ?
+          AND week_end = ?
         ORDER BY id
         """,
         conn,
-        params=[employee, week_start, week_end],
+        params=[employee, week_start.isoformat(), week_end.isoformat()],
     )
     conn.close()
 
@@ -237,7 +191,7 @@ def read_all_reports():
 
 
 # =============================
-# DATE HELPERS
+# DATE & ROLE HELPERS
 # =============================
 
 def last_monday():
@@ -248,10 +202,6 @@ def last_monday():
 def last_sunday():
     return last_monday() + timedelta(days=6)
 
-
-# =============================
-# ROLE FROM URL
-# =============================
 
 def get_role_from_url():
     role = "user"
@@ -270,11 +220,10 @@ def get_role_from_url():
 
 
 # =============================
-# STREAMLIT MAIN
+# APP
 # =============================
 
 st.set_page_config("Weekly RF Work Report", layout="wide")
-
 init_db()
 
 role = get_role_from_url()
@@ -287,10 +236,7 @@ else:
     menu = "Submit Weekly Report"
 
 
-# =============================
 # SUBMIT PAGE
-# =============================
-
 if menu == "Submit Weekly Report":
     st.title("📋 Weekly Work Report")
 
@@ -340,10 +286,7 @@ if menu == "Submit Weekly Report":
             st.success("Weekly Report saved successfully ✅")
 
 
-# =============================
-# ADMIN REPORT VIEW
-# =============================
-
+# ADMIN VIEW
 if menu == "View Reports":
     st.title("📊 Admin Report Dashboard")
 
@@ -398,16 +341,12 @@ if menu == "View Reports":
 
         st.subheader("By Employee")
         st.dataframe(
-            df.groupby("employee")
-            .size()
-            .reset_index(name="Activities")
+            df.groupby("employee").size().reset_index(name="Activities")
         )
 
         st.subheader("By Theme")
         st.dataframe(
-            df.groupby("theme")
-            .size()
-            .reset_index(name="Activities")
+            df.groupby("theme").size().reset_index(name="Activities")
         )
 
         st.subheader("Detailed Data")
@@ -415,4 +354,3 @@ if menu == "View Reports":
 
         csv = df.to_csv(index=False).encode()
         st.download_button("⬇️ Download CSV", csv, "weekly_report.csv")
-
