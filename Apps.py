@@ -111,12 +111,11 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
     conn = get_conn()
     cur = conn.cursor()
 
-    # Delete old entries for same employee & week
     cur.execute("""
         DELETE FROM reports
         WHERE employee = %s
-        AND week_start = %s
-        AND week_end = %s
+          AND week_start = %s
+          AND week_end = %s
     """, (employee, week_start, week_end))
 
     now = datetime.utcnow()
@@ -127,7 +126,7 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
         justification = (r.get("justification") or "").strip()
         theme = r.get("theme") or THEMES[0]
 
-        if not work and not pending:
+        if not work and not pending and not justification:
             continue
 
         cur.execute("""
@@ -164,16 +163,14 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
 
 def load_user_week(employee, week_start, week_end):
     conn = get_conn()
-
     df = pd.read_sql("""
         SELECT theme, work, pending, justification
         FROM reports
         WHERE employee = %s
-        AND week_start = %s
-        AND week_end = %s
+          AND week_start = %s
+          AND week_end = %s
         ORDER BY id
     """, conn, params=[employee, week_start, week_end])
-
     conn.close()
 
     if df.empty:
@@ -194,7 +191,7 @@ def read_all_reports():
     conn.close()
 
     if not df.empty:
-        for c in ["submission_date","week_start","week_end"]:
+        for c in ["submission_date", "week_start", "week_end"]:
             df[c] = pd.to_datetime(df[c]).dt.date
 
     return df
@@ -226,9 +223,9 @@ def get_role_from_url():
             if isinstance(r, list):
                 r = r[0]
             r = r.lower()
-            if r in ["user","admin"]:
+            if r in ["user", "admin"]:
                 role = r
-    except:
+    except Exception:
         pass
     return role
 
@@ -237,7 +234,7 @@ def get_role_from_url():
 # STREAMLIT MAIN
 # =============================
 
-st.set_page_config("Weekly RF Work Report",layout="wide")
+st.set_page_config("Weekly RF Work Report", layout="wide")
 
 init_db()
 
@@ -256,10 +253,9 @@ else:
 # =============================
 
 if menu == "Submit Weekly Report":
-
     st.title("📋 Weekly Work Report")
 
-    col1,col2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
     with col1:
         emp = st.selectbox("Employee Name", EMPLOYEES)
@@ -275,11 +271,11 @@ if menu == "Submit Weekly Report":
     wk_start = st.date_input("Week Start (Last Monday)", last_monday())
     wk_end = st.date_input("Week End (Last Sunday)", last_sunday())
 
-    key=f"{emp}_{wk_start}_{wk_end}"
+    key = f"{emp}_{wk_start}_{wk_end}"
 
-    if "weekkey" not in st.session_state or st.session_state.weekkey!=key:
-        st.session_state.weekkey=key
-        st.session_state.weektable = load_user_week(emp,wk_start,wk_end)
+    if "weekkey" not in st.session_state or st.session_state.weekkey != key:
+        st.session_state.weekkey = key
+        st.session_state.weektable = load_user_week(emp, wk_start, wk_end)
 
     st.subheader("Work Details")
 
@@ -300,7 +296,7 @@ if menu == "Submit Weekly Report":
         if not emp:
             st.error("Please provide your name")
         else:
-            save_report(submission,wk_start,wk_end,emp,dept,edited)
+            save_report(submission, wk_start, wk_end, emp, dept, edited)
             st.session_state.weektable = edited
             st.success("Weekly Report saved successfully ✅")
 
@@ -310,7 +306,6 @@ if menu == "Submit Weekly Report":
 # =============================
 
 if menu == "View Reports":
-
     st.title("📊 Admin Report Dashboard")
 
     df = read_all_reports()
@@ -318,13 +313,12 @@ if menu == "View Reports":
     if df.empty:
         st.warning("No reports submitted yet.")
     else:
-
-        col1,col2,col3 = st.columns(3)
+        col1, col2, col3 = st.columns(3)
 
         with col1:
             period = st.selectbox(
                 "Time Period",
-                ["Weekly","Monthly","Quarterly","Half-Yearly","Yearly","All"]
+                ["Weekly", "Monthly", "Quarterly", "Half-Yearly", "Yearly", "All"]
             )
 
         with col2:
@@ -342,24 +336,24 @@ if menu == "View Reports":
         today = date.today()
 
         if period != "All":
-            if period=="Weekly":
-                start=today-timedelta(days=6)
-            elif period=="Monthly":
-                start=today.replace(day=1)
-            elif period=="Quarterly":
-                start=date(today.year,((today.month-1)//3)*3+1,1)
-            elif period=="Half-Yearly":
-                start=date(today.year,1 if today.month<=6 else 7,1)
-            elif period=="Yearly":
-                start=date(today.year,1,1)
+            if period == "Weekly":
+                start = today - timedelta(days=6)
+            elif period == "Monthly":
+                start = today.replace(day=1)
+            elif period == "Quarterly":
+                start = date(today.year, ((today.month - 1) // 3) * 3 + 1, 1)
+            elif period == "Half-Yearly":
+                start = date(today.year, 1 if today.month <= 6 else 7, 1)
+            elif period == "Yearly":
+                start = date(today.year, 1, 1)
 
-            df=df[df["submission_date"]>=start]
+            df = df[df["submission_date"] >= start]
 
-        if empf!="All":
-            df=df[df["employee"]==empf]
+        if empf != "All":
+            df = df[df["employee"] == empf]
 
-        if deptf!="All":
-            df=df[df["department"]==deptf]
+        if deptf != "All":
+            df = df[df["department"] == deptf]
 
         st.metric("Total Activities", len(df))
         st.metric("Pending Tasks", int(df["pending"].sum()))
@@ -375,4 +369,3 @@ if menu == "View Reports":
 
         csv = df.to_csv(index=False).encode()
         st.download_button("⬇️ Download CSV", csv, "weekly_report.csv")
-
