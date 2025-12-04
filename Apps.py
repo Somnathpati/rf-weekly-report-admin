@@ -58,57 +58,50 @@ DEPARTMENTS = ["Dissemination", "KMS", "GIS", "Platform", "Other"]
 # =============================
 
 def get_conn():
-    """
-    Safely connect to Supabase using st.secrets['supabase'].
-    If secrets are missing / misconfigured, show a clear error in the UI
-    instead of crashing with KeyError.
-    """
-    if "supabase" not in st.secrets:
-        st.error(
-            "❌ No [supabase] section found in Streamlit secrets.\n\n"
-            "Go to your app in Streamlit Cloud → 'Edit secrets' and add:\n\n"
-            "[supabase]\n"
-            'host = "db.amggibyukfnzozeofvcg.supabase.co"\n'
-            "port = 5432\n"
-            'database = "postgres"\n'
-            'user = "postgres"\n'
-            'password = "YOUR_NEW_SIMPLE_PASSWORD"\n'
-        )
-        st.stop()
-
     cfg = st.secrets["supabase"]
 
     required_keys = ["host", "database", "user", "password"]
     missing = [k for k in required_keys if k not in cfg]
-
     if missing:
-        st.error(
-            "❌ Missing keys in [supabase] secrets: "
-            + ", ".join(missing)
-            + "\n\nPlease open 'Edit secrets' and add them."
-        )
+        st.error("Missing keys in [supabase] secrets: " + ", ".join(missing))
         st.stop()
 
+    # hostaddr is optional – we use it to force IPv4 if present
+    hostaddr = cfg.get("hostaddr", None)
+
     try:
-        conn = psycopg2.connect(
-            host=cfg["host"],
-            port=cfg.get("port", 5432),
-            dbname=cfg["database"],
-            user=cfg["user"],
-            password=cfg["password"],
-            sslmode="require",  # required for Supabase
-        )
+        if hostaddr:
+            conn = psycopg2.connect(
+                host=cfg["host"],       # used for TLS / server name
+                hostaddr=hostaddr,      # actual IPv4 address to connect to
+                port=cfg.get("port", 5432),
+                dbname=cfg["database"],
+                user=cfg["user"],
+                password=cfg["password"],
+                sslmode="require",
+            )
+        else:
+            # fallback (IPv6/IPv4 auto) – but we *want* hostaddr
+            conn = psycopg2.connect(
+                host=cfg["host"],
+                port=cfg.get("port", 5432),
+                dbname=cfg["database"],
+                user=cfg["user"],
+                password=cfg["password"],
+                sslmode="require",
+            )
         return conn
+
     except psycopg2.OperationalError as e:
         st.error(
             "❌ Could not connect to Supabase database.\n\n"
             "Check that:\n"
             "• Project is Active (not Paused) in Supabase\n"
-            "• Host / database / user / password are correct\n\n"
+            "• Host / database / user / password are correct\n"
+            "• IPv4 hostaddr is correct\n\n"
             f"Technical detail: {e}"
         )
         st.stop()
-
 
 def init_db():
     conn = get_conn()
@@ -422,3 +415,4 @@ if menu == "View Reports":
 
         csv = df.to_csv(index=False).encode()
         st.download_button("⬇️ Download CSV", csv, "weekly_report.csv")
+
