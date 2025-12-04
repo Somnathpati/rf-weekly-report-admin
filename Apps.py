@@ -59,15 +59,24 @@ DEPARTMENTS = ["Dissemination", "KMS", "GIS", "Platform", "Other"]
 
 def get_conn():
     """
-    Supabase connection using DSN string from st.secrets:
-
-    Add in Streamlit secrets:
+    Read connection details from st.secrets['supabase']:
 
     [supabase]
-    dsn = "postgresql://postgres:PASSWORD@db.amggibyukfnzozeofvcg.supabase.co:5432/postgres?sslmode=require"
+    host = "db.amggibyukfnzozeofvcg.supabase.co"
+    port = 5432
+    database = "postgres"
+    user = "postgres"
+    password = "YOUR_NEW_SIMPLE_PASSWORD"
     """
-    dsn = st.secrets["supabase"]["dsn"]
-    conn = psycopg2.connect(dsn)
+    cfg = st.secrets["supabase"]
+    conn = psycopg2.connect(
+        host=cfg["host"],
+        port=cfg.get("port", 5432),
+        dbname=cfg["database"],
+        user=cfg["user"],
+        password=cfg["password"],
+        sslmode="require",  # needed for Supabase
+    )
     return conn
 
 
@@ -366,3 +375,4 @@ if menu == "View Reports":
 
         csv = df.to_csv(index=False).encode()
         st.download_button("⬇️ Download CSV", csv, "weekly_report.csv")
+
