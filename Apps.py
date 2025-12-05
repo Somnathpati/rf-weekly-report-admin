@@ -344,7 +344,7 @@ if menu == "View Reports":
             df.groupby("employee").size().reset_index(name="Activities")
         )
 
-        st.subheader("By Theme")
+               st.subheader("By Theme")
         st.dataframe(
             df.groupby("theme").size().reset_index(name="Activities")
         )
@@ -352,5 +352,12 @@ if menu == "View Reports":
         st.subheader("Detailed Data")
         st.dataframe(df, use_container_width=True)
 
-        csv = df.to_csv(index=False).encode()
-        st.download_button("⬇️ Download CSV", csv, "weekly_report.csv")
+        # ==== CSV DOWNLOAD ====
+        csv_data = df.to_csv(index=False)
+
+        st.download_button(
+            label="⬇️ Download filtered CSV",
+            data=csv_data,
+            file_name=f"weekly_reports_{date.today()}.csv",
+            mime="text/csv",
+        )
