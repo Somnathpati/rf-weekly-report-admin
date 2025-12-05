@@ -286,7 +286,10 @@ if menu == "Submit Weekly Report":
             st.success("Weekly Report saved successfully ✅")
 
 
+# =============================
 # ADMIN VIEW
+# =============================
+
 if menu == "View Reports":
     st.title("📊 Admin Report Dashboard")
 
@@ -300,19 +303,19 @@ if menu == "View Reports":
         with col1:
             period = st.selectbox(
                 "Time Period",
-                ["Weekly", "Monthly", "Quarterly", "Half-Yearly", "Yearly", "All"],
+                ["Weekly", "Monthly", "Quarterly", "Half-Yearly", "Yearly", "All"]
             )
 
         with col2:
             empf = st.selectbox(
                 "Employee",
-                ["All"] + sorted(df["employee"].unique()),
+                ["All"] + sorted(df["employee"].unique())
             )
 
         with col3:
             deptf = st.selectbox(
                 "Department",
-                ["All"] + sorted(df["department"].unique()),
+                ["All"] + sorted(df["department"].unique())
             )
 
         today = date.today()
@@ -328,6 +331,7 @@ if menu == "View Reports":
                 start = date(today.year, 1 if today.month <= 6 else 7, 1)
             elif period == "Yearly":
                 start = date(today.year, 1, 1)
+
             df = df[df["submission_date"] >= start]
 
         if empf != "All":
@@ -344,7 +348,7 @@ if menu == "View Reports":
             df.groupby("employee").size().reset_index(name="Activities")
         )
 
-               st.subheader("By Theme")
+        st.subheader("By Theme")
         st.dataframe(
             df.groupby("theme").size().reset_index(name="Activities")
         )
