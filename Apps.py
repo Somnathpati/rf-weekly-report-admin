@@ -1,18 +1,26 @@
 import streamlit as st
-import sqlite3
-from datetime import date, datetime, timedelta
+import psycopg2
 import pandas as pd
+from datetime import date, datetime, timedelta
+from io import StringIO
 
 # =============================
-# CONFIG
+# APP CONFIG
 # =============================
 
-DB_NAME = "weekly_reports.db"
+st.set_page_config(
+    page_title="RF Weekly Work Report",
+    layout="wide"
+)
+
+# =============================
+# CONSTANTS
+# =============================
 
 THEMES = [
     "1. AI-Driven Multilingual Content Localization & Accessible Digital Outreach through Integrated Multichannel Platforms",
     "2. AI-Based Crop Health Detection App and WhatsApp Bot",
-    "3. Tele-Consultation Platform Enhancements – Advancing AI-integrated, multilingual, voice-enabled helpline and advisory services",
+    "3. Tele-Consultation Platform Enhancements – AI-integrated, multilingual, voice-enabled helpline",
     "4. Development of Animal Digital Information System",
     "5. FPO Management App – Development and Refinement",
     "6. 24/7 Weather-Based Marine Fisheries Advisories (Machli App)",
@@ -20,24 +28,24 @@ THEMES = [
     "8. Livelihood Advisory Podcasts via Internet Radio",
     "9. RF Livelihood Video Learning App",
     "10. Rural Yellow Pages App – Development & Scale",
-    "11. Digital Farm Management System (DFMS)",
-    "12. RF Super App – Integrated Delivery",
+    "11. Digital Farm Management System (DFMS) – Predictive Advisory",
+    "12. RF Super App – Integrated Service Delivery",
     "13. E-Learning & Knowledge Dissemination",
     "14. Cloud Migration & Infrastructure Enhancements",
-    "15. Early Warning & Disaster Resilience",
-    "16. Tech for Social Good",
-    "17. Data-Driven Impact Measurement",
-    "18. WebKMS + Multilingual AI",
-    "19. Geo-Spatial Vulnerability Mapping",
-    "20. Water Harvesting Structure Mapping",
-    "21. NDVI-Based Crop Yield",
-    "22. Multi-Hazard Risk Mapping",
-    "23. AGB Estimation",
-    "24. Change Detection Monitoring",
-    "25. Climate Modeling & Forecasting",
-    "26. GIS-Based M&E",
-    "27. Spatial Decision Support",
-    "28. IT Documentation & Support",
+    "15. Early Warning Systems & Disaster Resilience",
+    "16. Tech for Social Good & Knowledge Empowerment",
+    "17. Data-Driven Impact: Measuring Success in Tech-based Outreach",
+    "18. Web-Based Knowledge Management System (WebKMS) + Multilingual AI",
+    "19. Geo-Spatial Vulnerability Mapping for Inclusive Development",
+    "20. Monitoring & Mapping Water Harvesting Structures",
+    "21. NDVI-Based Crop Yield Computation",
+    "22. Multi-Hazard Risk Mapping & Early Warning Systems",
+    "23. Above Ground Biomass (AGB) Estimation",
+    "24. Change Detection & Environmental Monitoring",
+    "25. Climate-Responsive Modelling & Forecasting",
+    "26. Tech-Enabled Monitoring & Evaluation using Mobile-Based GIS",
+    "27. Spatial Decision Support & Risk Intelligence (WebKMS + GIS/RS)",
+    "28. IT Documentation, Digital Infrastructure Support & Other Support",
 ]
 
 EMPLOYEES = [
@@ -47,74 +55,110 @@ EMPLOYEES = [
     "Rajak Manjothi",
     "Kushal Kuantia",
     "Priyanka Sharma",
-    "Shivam Periwal",
+    "Shivam",
     "Selvaraj",
     "Other",
 ]
 
-DEPARTMENTS = ["Dissemination", "KMS", "GIS", "Platform", "Other"]
+DEPARTMENTS = [
+    "Dissemination",
+    "KMS",
+    "GIS",
+    "Platform",
+    "Other",
+]
+
+TABLE_NAME = "rf_weekly_reports"
 
 
 # =============================
-# SQLITE HELPERS
+# SUPABASE CONNECTION
 # =============================
 
 def get_conn():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    """Connect to Supabase Postgres using DSN from secrets."""
+    if "supabase" not in st.secrets or "dsn" not in st.secrets["supabase"]:
+        st.error(
+            "❌ Supabase DSN not found in secrets.\n\n"
+            "Go to 'Edit secrets' and add:\n\n"
+            "[supabase]\n"
+            'dsn = "postgresql://postgres.XXXX:YYYY@aws-0-REGION.pooler.supabase.com:6543/postgres"'
+        )
+        st.stop()
+
+    dsn = st.secrets["supabase"]["dsn"]
+    return psycopg2.connect(dsn, sslmode="require")
 
 
 def init_db():
+    """Create table if it does not exist."""
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS reports(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            submission_date TEXT,
-            week_start TEXT,
-            week_end TEXT,
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+            id SERIAL PRIMARY KEY,
+            submission_date DATE,
+            week_start DATE,
+            week_end DATE,
             employee TEXT,
             department TEXT,
             theme TEXT,
             work TEXT,
-            pending INTEGER,
+            pending BOOLEAN,
             justification TEXT,
-            updated TEXT
-        )
-        """
-    )
+            updated TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
     conn.commit()
+    cur.close()
     conn.close()
 
 
-def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.DataFrame):
+# =============================
+# DB HELPERS
+# =============================
+
+def save_report(submission_date, week_start, week_end, employee, department, rows: pd.DataFrame):
+    """
+    Save weekly report for one employee and one week.
+    Old entries for that employee+week are deleted first (so update works).
+    """
     conn = get_conn()
     cur = conn.cursor()
 
+    # Remove existing rows for this employee-week
     cur.execute(
-        """
-        DELETE FROM reports
-        WHERE employee = ?
-          AND week_start = ?
-          AND week_end = ?
+        f"""
+        DELETE FROM {TABLE_NAME}
+        WHERE employee = %s
+          AND week_start = %s
+          AND week_end = %s
         """,
-        (employee, week_start.isoformat(), week_end.isoformat()),
+        (employee, week_start, week_end),
     )
 
-    now = datetime.now().isoformat()
+    now = datetime.utcnow()
 
     for r in rows.to_dict("records"):
+        theme = r.get("theme") or THEMES[0]
         work = (r.get("work") or "").strip()
         pending = bool(r.get("pending", False))
         justification = (r.get("justification") or "").strip()
-        theme = r.get("theme") or THEMES[0]
 
+        # Skip completely empty rows
         if not work and not pending and not justification:
             continue
 
         cur.execute(
-            """
-            INSERT INTO reports (
+            f"""
+            INSERT INTO {TABLE_NAME} (
+                submission_date, week_start, week_end,
+                employee, department, theme, work,
+                pending, justification, updated
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
                 submission_date,
                 week_start,
                 week_end,
@@ -123,42 +167,30 @@ def save_report(submission_date, week_start, week_end, employee, dept, rows: pd.
                 theme,
                 work,
                 pending,
-                justification,
-                updated
-            )
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                submission_date.isoformat(),
-                week_start.isoformat(),
-                week_end.isoformat(),
-                employee,
-                dept,
-                theme,
-                work,
-                1 if pending else 0,
                 justification if pending else "",
                 now,
             ),
         )
 
     conn.commit()
+    cur.close()
     conn.close()
 
 
-def load_user_week(employee, week_start, week_end):
+def load_user_week(employee, week_start, week_end) -> pd.DataFrame:
+    """Load existing weekly report for an employee+week, or give one default row."""
     conn = get_conn()
     df = pd.read_sql(
-        """
+        f"""
         SELECT theme, work, pending, justification
-        FROM reports
-        WHERE employee = ?
-          AND week_start = ?
-          AND week_end = ?
+        FROM {TABLE_NAME}
+        WHERE employee = %s
+          AND week_start = %s
+          AND week_end = %s
         ORDER BY id
         """,
         conn,
-        params=[employee, week_start.isoformat(), week_end.isoformat()],
+        params=[employee, week_start, week_end],
     )
     conn.close()
 
@@ -173,14 +205,18 @@ def load_user_week(employee, week_start, week_end):
                 }
             ]
         )
-    else:
-        df["pending"] = df["pending"].astype(bool)
-        return df
+
+    df["pending"] = df["pending"].astype(bool)
+    return df
 
 
-def read_all_reports():
+def read_all_reports() -> pd.DataFrame:
+    """Read all reports for admin dashboard."""
     conn = get_conn()
-    df = pd.read_sql("SELECT * FROM reports ORDER BY updated DESC", conn)
+    df = pd.read_sql(
+        f"SELECT * FROM {TABLE_NAME} ORDER BY updated DESC",
+        conn,
+    )
     conn.close()
 
     if not df.empty:
@@ -196,6 +232,7 @@ def read_all_reports():
 
 def last_monday():
     today = date.today()
+    # Last week's Monday
     return today - timedelta(days=today.weekday() + 7)
 
 
@@ -204,113 +241,128 @@ def last_sunday():
 
 
 def get_role_from_url():
-    role = "user"
+    """?role=user or ?role=admin"""
     try:
         params = st.query_params
-        if "role" in params:
-            r = params["role"]
-            if isinstance(r, list):
-                r = r[0]
-            r = r.lower()
-            if r in ["user", "admin"]:
-                role = r
     except Exception:
-        pass
-    return role
+        return "user"
+
+    role_val = params.get("role", ["user"])
+    if isinstance(role_val, list):
+        role_val = role_val[0]
+
+    role_val = (role_val or "").lower()
+    return "admin" if role_val == "admin" else "user"
 
 
 # =============================
-# APP
+# INIT DB
 # =============================
 
-st.set_page_config("Weekly RF Work Report", layout="wide")
 init_db()
+
+# =============================
+# LAYOUT: SIDEBAR & MENU
+# =============================
 
 role = get_role_from_url()
 
 if role == "admin":
-    st.sidebar.title("🧑‍💼 ADMIN PANEL")
+    st.sidebar.title("🧑‍💼 Admin Panel")
     menu = st.sidebar.radio("Menu", ["Submit Weekly Report", "View Reports"])
 else:
-    st.sidebar.title("👷‍♂️ STAFF SUBMISSION")
+    st.sidebar.title("👷‍♂️ Weekly Report")
     menu = "Submit Weekly Report"
 
 
-# SUBMIT PAGE
+# =============================
+# SUBMIT PAGE (USER + ADMIN)
+# =============================
+
 if menu == "Submit Weekly Report":
-    st.title("📋 Weekly Work Report")
+    st.title("📋 Weekly Work Report (Supabase-backed)")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        emp = st.selectbox("Employee Name", EMPLOYEES)
-        if emp == "Other":
-            emp = st.text_input("Enter your name")
+        employee = st.selectbox("Choose Your Name", EMPLOYEES)
+        if employee == "Other":
+            employee = st.text_input("Enter your name")
 
     with col2:
-        dept = st.selectbox("Department", DEPARTMENTS)
+        department = st.selectbox("Select Your Department", DEPARTMENTS)
 
     st.subheader("Report Period")
+    submission_date = st.date_input("Submission Date", date.today())
+    week_start = st.date_input("Week Start (Last Monday)", last_monday())
+    week_end = st.date_input("Week End (Last Sunday)", last_sunday())
 
-    submission = st.date_input("Today's Date", date.today())
-    wk_start = st.date_input("Week Start (Last Monday)", last_monday())
-    wk_end = st.date_input("Week End (Last Sunday)", last_sunday())
+    # Load existing week data for that employee
+    key = f"{employee}_{week_start}_{week_end}"
+    if "week_key" not in st.session_state or st.session_state.week_key != key:
+        st.session_state.week_key = key
+        st.session_state.week_table = load_user_week(employee, week_start, week_end)
 
-    key = f"{emp}_{wk_start}_{wk_end}"
-
-    if "weekkey" not in st.session_state or st.session_state.weekkey != key:
-        st.session_state.weekkey = key
-        st.session_state.weektable = load_user_week(emp, wk_start, wk_end)
-
-    st.subheader("Work Details")
+    st.subheader("Theme-wise Work Details")
 
     edited = st.data_editor(
-        st.session_state.weektable,
+        st.session_state.week_table,
         num_rows="dynamic",
         hide_index=True,
         use_container_width=True,
         column_config={
             "theme": st.column_config.SelectboxColumn("Theme", options=THEMES),
-            "work": st.column_config.TextColumn("Work Done"),
-            "pending": st.column_config.CheckboxColumn("Pending"),
+            "work": st.column_config.TextColumn("Work Done (max 5000 chars)"),
+            "pending": st.column_config.CheckboxColumn("Pending?"),
             "justification": st.column_config.TextColumn("Justification (if pending)"),
         },
     )
 
     if st.button("✅ Submit / Update Weekly Report"):
-        if not emp:
-            st.error("Please provide your name")
+        if not employee or employee.strip() == "":
+            st.error("Please enter your name.")
         else:
-            save_report(submission, wk_start, wk_end, emp, dept, edited)
-            st.session_state.weektable = edited
-            st.success("Weekly Report saved successfully ✅")
+            save_report(
+                submission_date,
+                week_start,
+                week_end,
+                employee.strip(),
+                department,
+                edited,
+            )
+            st.session_state.week_table = edited
+            st.success("✅ Weekly report saved in Supabase (will not be lost on redeploy).")
 
 
-# ADMIN VIEW
+# =============================
+# ADMIN VIEW PAGE
+# =============================
+
 if menu == "View Reports":
-    st.title("📊 Admin Report Dashboard")
+    st.title("📊 Admin Dashboard – Combined Reports (Supabase)")
 
     df = read_all_reports()
 
     if df.empty:
         st.warning("No reports submitted yet.")
     else:
+        # Filters
         col1, col2, col3 = st.columns(3)
 
         with col1:
             period = st.selectbox(
                 "Time Period",
-                ["Weekly", "Monthly", "Quarterly", "Half-Yearly", "Yearly", "All"],
+                ["All", "Weekly", "Monthly", "Quarterly", "Half-Yearly", "Yearly"],
             )
 
         with col2:
-            empf = st.selectbox(
+            emp_filter = st.selectbox(
                 "Employee",
                 ["All"] + sorted(df["employee"].unique()),
             )
 
         with col3:
-            deptf = st.selectbox(
+            dept_filter = st.selectbox(
                 "Department",
                 ["All"] + sorted(df["department"].unique()),
             )
@@ -319,43 +371,50 @@ if menu == "View Reports":
 
         if period != "All":
             if period == "Weekly":
-                start = today - timedelta(days=6)
+                start_date = today - timedelta(days=6)
             elif period == "Monthly":
-                start = today.replace(day=1)
+                start_date = today.replace(day=1)
             elif period == "Quarterly":
-                start = date(today.year, ((today.month - 1) // 3) * 3 + 1, 1)
+                start_date = date(today.year, ((today.month - 1) // 3) * 3 + 1, 1)
             elif period == "Half-Yearly":
-                start = date(today.year, 1 if today.month <= 6 else 7, 1)
+                start_date = date(today.year, 1 if today.month <= 6 else 7, 1)
             elif period == "Yearly":
-                start = date(today.year, 1, 1)
-            df = df[df["submission_date"] >= start]
+                start_date = date(today.year, 1, 1)
 
-        if empf != "All":
-            df = df[df["employee"] == empf]
+            df = df[df["submission_date"] >= start_date]
 
-        if deptf != "All":
-            df = df[df["department"] == deptf]
+        if emp_filter != "All":
+            df = df[df["employee"] == emp_filter]
 
-        st.metric("Total Activities", len(df))
-        st.metric("Pending Tasks", int(df["pending"].sum()))
+        if dept_filter != "All":
+            df = df[df["department"] == dept_filter]
+
+        # High-level metrics
+        st.metric("Total Activity Rows", len(df))
+        st.metric("Pending Tasks", int(df["pending"].sum()) if "pending" in df else 0)
 
         st.subheader("By Employee")
         st.dataframe(
-            df.groupby("employee").size().reset_index(name="Activities")
+            df.groupby("employee").size().reset_index(name="Activities"),
+            use_container_width=True,
         )
 
         st.subheader("By Theme")
         st.dataframe(
-            df.groupby("theme").size().reset_index(name="Activities")
+            df.groupby("theme").size().reset_index(name="Activities"),
+            use_container_width=True,
         )
 
         st.subheader("Detailed Data")
         st.dataframe(df, use_container_width=True)
 
-        csv_data = df.to_csv(index=False)
+        # Combined CSV for current filter
+        csv_buf = StringIO()
+        df.to_csv(csv_buf, index=False)
+
         st.download_button(
-            label="⬇️ Download filtered CSV",
-            data=csv_data,
-            file_name=f"weekly_reports_{date.today()}.csv",
+            "⬇ Download Combined CSV (Current Filters)",
+            csv_buf.getvalue(),
+            file_name=f"rf_weekly_report_{date.today()}.csv",
             mime="text/csv",
         )
